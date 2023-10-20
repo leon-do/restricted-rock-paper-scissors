@@ -23,14 +23,17 @@ contract RRPS is ERC1155 {
     uint PAPER = 2;
     uint SCISSOR = 3;
 
-    // list of stars (not ERC-1155)
-    mapping(address => uint) stars;
-
-    // is player in a game
-    mapping(address => bool) inGame;
+    // list of players
+    mapping (address => Player) players;
 
     // list of games
     mapping(uint => Game) public games;
+
+    // player info
+    struct Player {
+        uint stars;
+        bool inGame;
+    }
 
     // game info
     struct Game {
@@ -50,7 +53,7 @@ contract RRPS is ERC1155 {
      */
     function mint() public payable {
         require(msg.value == 1 ether, "Must Pay to Start");
-        stars[msg.sender] = stars[msg.sender] + 3;
+        players[msg.sender].stars = players[msg.sender].stars + 3;
         _mint(msg.sender, ROCK, 4, "");
         _mint(msg.sender, PAPER, 4, "");
         _mint(msg.sender, SCISSOR, 4, "");
@@ -77,26 +80,26 @@ contract RRPS is ERC1155 {
         address _to2,
         bytes32 _commitHash2
     ) public {
-        require(inGame[_to1] == false, "Player 1 In Game");
-        require(inGame[_to2] == false, "Player 2 In Game");
+        require(players[_to1].inGame == false, "Player 1 In Game");
+        require(players[_to2].inGame == false, "Player 2 In Game");
         require(games[_game].blockNum > 0, "Game Exists");
         // verify player signature
         address player1 = getSigner(_signature1, _game, _to1, _commitHash1);
         address player2 = getSigner(_signature2, _game, _to2, _commitHash2);
         // player has stars
-        require(stars[player1] > 0, "Player1 Has No Stars");
-        require(stars[player2] > 0, "Player2 Has No Stars");
+        require(players[player1].stars > 0, "Player1 Has No Stars");
+        require(players[player2].stars > 0, "Player2 Has No Stars");
         // both opponents agree to each other
         require(_to1 == player2, "Incorrect Opponent");
         require(_to2 == player1, "Incorrect Opponent");
         // set timeline to reveal cards
-        games[_game].blockNum = block.number + 1000;
+        games[_game].blockNum = block.number + 10;
+        players[_to1].inGame = true;
+        players[_to2].inGame = true;
         games[_game].player1 = player1;
         games[_game].player2 = player2;
         games[_game].commit1 = _commitHash1;
         games[_game].commit2 = _commitHash2;
-        inGame[player1] = true;
-        inGame[player2] = true;
     }
 
     /*
@@ -125,7 +128,7 @@ contract RRPS is ERC1155 {
     }
 
     /*
-     * Handle game over
+     * Handle Winner/Loser logic 
      * @param _game id aka lobby number
      */
     function close(uint _game) public returns (bool) {
@@ -138,8 +141,8 @@ contract RRPS is ERC1155 {
             balanceOf(games[_game].player2, games[_game].reveal2) > 0,
             "Player2 Has No Card"
         );
-        require(stars[games[_game].player1] > 0, "Player1 Has No Stars");
-        require(stars[games[_game].player2] > 0, "Player2 Has No Stars");
+        require(players[games[_game].player1].stars > 0, "Player1 Has No Stars");
+        require(players[games[_game].player2].stars > 0, "Player2 Has No Stars");
         // if game expired and neither revealed
         if (
             block.number > games[_game].blockNum &&
@@ -156,8 +159,8 @@ contract RRPS is ERC1155 {
         ) {
             // player2 loses 1 star
             reset(_game);
-            stars[games[_game].player1]++;
-            stars[games[_game].player2]--;
+            players[games[_game].player1].stars ++;
+            players[games[_game].player2].stars --;
             return true;
         }
         // if game expired, player2 revealed & player1 hasn't revealed
@@ -168,8 +171,8 @@ contract RRPS is ERC1155 {
         ) {
             // player1 loses 1 star
             reset(_game);
-            stars[games[_game].player1]--;
-            stars[games[_game].player2]++;
+            players[games[_game].player1].stars --;
+            players[games[_game].player2].stars ++;
             return true;
         }
         // tie
@@ -184,8 +187,8 @@ contract RRPS is ERC1155 {
         ) {
             // transfer & burn
             reset(_game);
-            stars[games[_game].player1]++;
-            stars[games[_game].player2]--;
+            players[games[_game].player1].stars ++;
+            players[games[_game].player2].stars --;
             _burn(games[_game].player1, games[_game].reveal1, 1);
             _burn(games[_game].player2, games[_game].reveal2, 1);
             return true;
@@ -198,8 +201,8 @@ contract RRPS is ERC1155 {
         ) {
             // transfer & burn
             reset(_game);
-            stars[games[_game].player1]--;
-            stars[games[_game].player2]++;
+            players[games[_game].player1].stars --;
+            players[games[_game].player2].stars ++;
             _burn(games[_game].player1, games[_game].reveal1, 1);
             _burn(games[_game].player2, games[_game].reveal2, 1);
             return true;
@@ -213,8 +216,8 @@ contract RRPS is ERC1155 {
      */
     function reset(uint _game) private {
         games[_game].complete = true;
-        inGame[games[_game].player1] = false;
-        inGame[games[_game].player2] = false;
+        players[games[_game].player1].inGame = false;
+        players[games[_game].player2].inGame = false;
     }
 
     /*
@@ -223,16 +226,16 @@ contract RRPS is ERC1155 {
      * @return data
      */
     function withdraw() public payable returns (bytes memory) {
-        require(stars[msg.sender] > 0, "Has No Stars");
+        require(players[msg.sender].stars > 0, "Has No Stars");
         require(balanceOf(msg.sender, ROCK) == 0, "Has Rock Card");
         require(balanceOf(msg.sender, PAPER) == 0, "Has Paper Card");
         require(balanceOf(msg.sender, SCISSOR) == 0, "Has Scissor Card");
 
         // 0.3 ETH per Star on a 1 ETH buy in
-        uint value = (stars[msg.sender] * 3) / 100;
+        uint value = (players[msg.sender].stars * 3) / 100;
 
         // burn stars
-        stars[msg.sender] = 0;
+        players[msg.sender].stars = 0;
 
         // transfer ETH
         (bool sent, bytes memory data) = msg.sender.call{value: value}("");
