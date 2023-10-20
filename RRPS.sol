@@ -8,7 +8,8 @@ import "@openzeppelin/contracts/utils/cryptography/ECDSA.sol";
 0. mint()       - Pay ETH to mint cards. Can mint multiple times
 1. commit()     - Both players commit in the same transaction. This can be combined off-chain
 2. reveal()     - Players reveal asynchronously. Both players must submit within a timeframe
-3. gameOver()   - Anyone can call this function to determine the winner
+3. close()      - Anyone can call this function to determine the winner
+4. reset()      - Closes game and allows players to commit() again
 4. withdraw()   - Trade Stars for ETH. Player must have stars && no cards
 */
 
@@ -24,6 +25,9 @@ contract RRPS is ERC1155 {
 
     // list of stars (not ERC-1155)
     mapping(address => uint) stars;
+
+    // is player in a game
+    mapping(address => bool) inGame;
 
     // list of games
     mapping(uint => Game) public games;
@@ -73,6 +77,8 @@ contract RRPS is ERC1155 {
         address _to2,
         bytes32 _commitHash2
     ) public {
+        require(inGame[_to1] == false, "Player 1 In Game");
+        require(inGame[_to2] == false, "Player 2 In Game");
         require(games[_game].blockNum > 0, "Game Exists");
         // verify player signature
         address player1 = getSigner(_signature1, _game, _to1, _commitHash1);
@@ -89,6 +95,8 @@ contract RRPS is ERC1155 {
         games[_game].player2 = player2;
         games[_game].commit1 = _commitHash1;
         games[_game].commit2 = _commitHash2;
+        inGame[player1] = true;
+        inGame[player2] = true;
     }
 
     /*
@@ -112,7 +120,7 @@ contract RRPS is ERC1155 {
         }
         // if both cards are revealed, then handle
         if (games[_game].reveal1 != 0 && games[_game].reveal2 != 0) {
-            gameOver(_game);
+            close(_game);
         }
     }
 
@@ -120,7 +128,7 @@ contract RRPS is ERC1155 {
      * Handle game over
      * @param _game id aka lobby number
      */
-    function gameOver(uint _game) public returns (bool) {
+    function close(uint _game) public returns (bool) {
         require(games[_game].complete == false, "Game Already Over");
         require(
             balanceOf(games[_game].player1, games[_game].reveal1) > 0,
@@ -138,8 +146,7 @@ contract RRPS is ERC1155 {
             games[_game].reveal1 == 0 &&
             games[_game].reveal2 == 0
         ) {
-            // do nothing
-            return games[_game].complete = true;
+            reset(_game);
         }
         // if game expired, player1 revealed & player2 hasn't revealed
         if (
@@ -148,7 +155,7 @@ contract RRPS is ERC1155 {
             games[_game].reveal2 == 0
         ) {
             // player2 loses 1 star
-            games[_game].complete = true;
+            reset(_game);
             stars[games[_game].player1]++;
             stars[games[_game].player2]--;
             return true;
@@ -160,15 +167,14 @@ contract RRPS is ERC1155 {
             games[_game].reveal1 == 0
         ) {
             // player1 loses 1 star
-            games[_game].complete = true;
+            reset(_game);
             stars[games[_game].player1]--;
             stars[games[_game].player2]++;
             return true;
         }
         // tie
         if (games[_game].reveal1 == games[_game].reveal2) {
-            // do nothing
-            return games[_game].complete = true;
+            reset(_game);
         }
         // player1 wins
         if (
@@ -177,7 +183,7 @@ contract RRPS is ERC1155 {
             (games[_game].reveal1 == SCISSOR && games[_game].reveal2 == PAPER)
         ) {
             // transfer & burn
-            games[_game].complete = true;
+            reset(_game);
             stars[games[_game].player1]++;
             stars[games[_game].player2]--;
             _burn(games[_game].player1, games[_game].reveal1, 1);
@@ -191,7 +197,7 @@ contract RRPS is ERC1155 {
             (games[_game].reveal2 == SCISSOR && games[_game].reveal1 == PAPER)
         ) {
             // transfer & burn
-            games[_game].complete = true;
+            reset(_game);
             stars[games[_game].player1]--;
             stars[games[_game].player2]++;
             _burn(games[_game].player1, games[_game].reveal1, 1);
@@ -199,6 +205,16 @@ contract RRPS is ERC1155 {
             return true;
         }
         return false; // this means I'm missing logic somewhere
+    }
+
+    /*
+     * Reset game: mark as complete and take players out of game
+     * @param _game id aka lobby number
+     */
+    function reset(uint _game) private {
+        games[_game].complete = true;
+        inGame[games[_game].player1] = false;
+        inGame[games[_game].player2] = false;
     }
 
     /*
